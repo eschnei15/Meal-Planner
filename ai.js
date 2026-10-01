@@ -66,17 +66,21 @@ async function callAI(prompt, maxTokens = 500) {
 
 // Ask the AI to double-check whether a full recipe actually meets the rules.
 // Returns { ok:boolean, reason:string } or null if AI is off / call fails.
-async function aiCheckMeal({ name, ingredients, instructions, activeRules, allergies, dislikes }) {
+async function aiCheckMeal({ name, ingredients, instructions, activeRules, allergies, dislikes, maxTime, spiceLevel, skillLevel, equipment }) {
   if (!enabled()) return null;
   try {
-    const prompt = `You are checking one real recipe against a household's dietary rules before it's served to them. Be strict and literal-minded — this matters for allergies and religious dietary law.
+    const prompt = `You are checking one real recipe against a household's requirements before it's served to them. Be strict and literal-minded about allergies and dietary law; be reasonable (not overly strict) about time/spice/skill/equipment, since those are preferences, not safety rules.
 RECIPE: "${name}"
 INGREDIENTS: ${ingredients.join(", ")}
 INSTRUCTIONS: ${instructions.join(" ")}
 ACTIVE DIETARY RULES: ${activeRules.join(", ") || "none"}
 ALLERGIES (must never be present): ${allergies || "none"}
 DISLIKES (avoid if reasonably possible): ${dislikes || "none"}
-Does this recipe, as written, satisfy every rule and avoid every allergen? Consider things a simple keyword scan might miss (e.g. an ingredient name that doesn't literally say "pork" but is pork, or a hidden dairy/meat combination).
+Max time they have per meal: ${maxTime ? maxTime + " minutes" : "no limit given"}
+Spice tolerance: ${spiceLevel || "no preference given"}
+Their cooking skill level: ${skillLevel || "no preference given"} (don't exclude a recipe just for being simple, only if it's clearly too advanced)
+Kitchen equipment they have: ${equipment && equipment.length ? equipment.join(", ") : "not specified — assume a normal kitchen (stove, oven, basic pots/pans) is fine"}
+Does this recipe, as actually written, satisfy every dietary rule, avoid every allergen, and reasonably fit the time/spice/skill/equipment constraints? Consider things a simple keyword scan might miss (e.g. an ingredient that doesn't literally say "pork" but is pork, a hidden dairy/meat combination, or a step requiring a specific appliance).
 Return ONLY JSON: {"ok": true or false, "reason": "one short sentence, empty string if ok"}`;
     const text = await callAI(prompt, 200);
     return JSON.parse(text);
@@ -103,4 +107,25 @@ Return ONLY JSON: {"subs":[{"item":"","note":""}]}`;
   }
 }
 
-module.exports = { enabled, aiCheckMeal, aiSubstitute };
+// Rough nutrition estimate for a full recipe. Returns
+// { calories, protein, carbs, fat, perServing, note } or null if AI is off
+// or the call fails. This is explicitly an AI estimate, not a lookup against
+// a verified nutrition database — the caller/UI should label it as such.
+async function aiNutrition({ name, ingredients, servings = 4 }) {
+  if (!enabled()) return null;
+  try {
+    const prompt = `Estimate the nutrition for this recipe, assuming it serves ${servings} people total.
+RECIPE: "${name}"
+INGREDIENTS: ${ingredients.map(i => `${i.measure || ""} ${i.item}`).join(", ")}
+Give your best realistic estimate PER SERVING (not for the whole pot). Round to sensible whole numbers.
+Return ONLY JSON: {"calories": number, "protein": number, "carbs": number, "fat": number}`;
+    const text = await callAI(prompt, 150);
+    const data = JSON.parse(text);
+    return { ...data, servings, note: "AI estimate, not a verified nutrition-database lookup — use as a rough guide only." };
+  } catch (e) {
+    console.error("aiNutrition failed:", e.message);
+    return null;
+  }
+}
+
+module.exports = { enabled, aiCheckMeal, aiSubstitute, aiNutrition };

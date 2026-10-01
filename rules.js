@@ -42,9 +42,56 @@ const PRESET_CHECKS = {
   }
 };
 
-// Decide if a meal (array of lowercase ingredient names) violates ANY active rule,
-// any user allergy, or any user dislike. Returns { violates:boolean, reasons:[] }
-function checkMeal(ingredientNames, activeRuleLabels, allergyText, dislikeText) {
+// --- Heuristics for time / spice / skill / equipment ---------------------
+// TheMealDB has NO structured fields for any of these — no minutes, no spice
+// rating, no difficulty, no equipment list. Everything below is a rough,
+// best-effort estimate from the ingredient list and instruction text, not a
+// real measurement. It's noticeably improved when an AI key is set (ai.js
+// has the model read the actual recipe), but even without one this gives a
+// reasonable first pass instead of ignoring these filters entirely.
+
+const SPICY_KW = ["chili", "chilli", "jalape", "habanero", "cayenne", "hot sauce", "sriracha", "harissa", "gochujang", "red pepper flake", "ghost pepper", "scotch bonnet", "wasabi", "hot chili powder"];
+const APPLIANCES = {
+  "oven": ["bake", "roast", "oven"],
+  "blender": ["blend", "blender", "food processor"],
+  "slow cooker": ["slow cooker", "crockpot", "crock pot", "slow-cook"],
+  "air fryer": ["air fryer", "air-fry"],
+  "grill": ["grill", "barbecue", "bbq"],
+  "microwave": ["microwave"],
+  "pressure cooker": ["pressure cooker", "instant pot"],
+  "stovetop": [] // treated as always available — not flagged
+};
+
+function estimateComplexity(stepsCount, ingredientsCount) {
+  const estMinutes = Math.round(15 + stepsCount * 4 + ingredientsCount * 2);
+  let level = "Beginner";
+  if (ingredientsCount > 12 || stepsCount > 10) level = "Advanced";
+  else if (ingredientsCount > 6 || stepsCount > 6) level = "Intermediate";
+  return { estMinutes, level };
+}
+
+function detectSpiceLevel(ingredientNames) {
+  const ings = ingredientNames.map(s => s.toLowerCase());
+  const hits = SPICY_KW.filter(k => ings.some(i => i.includes(k))).length;
+  if (hits >= 2) return "Hot";
+  if (hits === 1) return "Medium";
+  return "Mild";
+}
+
+function detectRequiredAppliances(instructionsText) {
+  const text = (instructionsText || "").toLowerCase();
+  const found = [];
+  for (const [name, keywords] of Object.entries(APPLIANCES)) {
+    if (keywords.length && keywords.some(k => text.includes(k))) found.push(name);
+  }
+  return found;
+}
+
+const SKILL_ORDER = ["Beginner", "Intermediate", "Advanced"];
+
+// Decide if a meal violates ANY active rule, allergy, dislike, or (loosely)
+// the time/spice/skill/equipment preferences. Returns { violates, reasons }
+function checkMeal(ingredientNames, activeRuleLabels, allergyText, dislikeText, extra = {}) {
   const ings = ingredientNames.map(s => s.toLowerCase());
   const reasons = [];
 
@@ -58,7 +105,27 @@ function checkMeal(ingredientNames, activeRuleLabels, allergyText, dislikeText) 
   for (const d of custom(dislikeText)) {
     if (ings.some(i => i.includes(d))) reasons.push(`contains disliked item "${d}"`);
   }
-  return { violates: reasons.length > 0, reasons };
+
+  const { maxTime, spiceLevel, skillLevel, equipment, instructionsText, stepsCount } = extra;
+  const { estMinutes, level: complexity } = estimateComplexity(stepsCount || 0, ings.length);
+
+  if (maxTime && estMinutes > Number(maxTime) * 1.3) {
+    reasons.push(`likely takes longer than your ${maxTime}-minute limit (est. ~${estMinutes} min)`);
+  }
+  if (spiceLevel === "Mild" && detectSpiceLevel(ings) === "Hot") {
+    reasons.push("looks spicier than your Mild preference");
+  }
+  if (skillLevel && SKILL_ORDER.indexOf(complexity) > SKILL_ORDER.indexOf(skillLevel)) {
+    reasons.push(`looks more advanced (${complexity}) than your ${skillLevel} skill level`);
+  }
+  if (equipment && equipment.length) {
+    const have = equipment.map(e => e.toLowerCase());
+    const required = detectRequiredAppliances(instructionsText);
+    const missing = required.filter(r => !have.some(h => h.includes(r) || r.includes(h)));
+    if (missing.length) reasons.push(`needs ${missing.join(", ")}, which isn't in your equipment list`);
+  }
+
+  return { violates: reasons.length > 0, reasons, estMinutes, complexity, spiceLevel: detectSpiceLevel(ings) };
 }
 
 // Small hardcoded substitution table. Each entry: tags describe what the substitute IS,
@@ -107,4 +174,4 @@ function getSubstitutes(ingredientName) {
   return key ? SUBS[key] : null;
 }
 
-module.exports = { checkMeal, getSubstitutes, PRESET_CHECKS: Object.keys(PRESET_CHECKS) };
+module.exports = { checkMeal, getSubstitutes, estimateComplexity, detectSpiceLevel, detectRequiredAppliances, PRESET_CHECKS: Object.keys(PRESET_CHECKS) };

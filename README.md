@@ -123,15 +123,15 @@ If both variables happen to be set, Gemini is used automatically since it's
 free. **To turn AI off again**, remove whichever variable you set — the app
 falls straight back to the free, keyword-based logic, no code change needed.
 
-## Step 6 — (Optional) Get your own TheMealDB key
+## Step 6 — (Skip this one) A personal TheMealDB key
 
-The app works out of the box using TheMealDB's shared free test key. If you
-want a personal key (slightly more reliable, still free):
-
-1. Go to https://www.themealdb.com/api.php and follow their free-tier signup.
-2. In Render, go to your service → **Environment** → **Add Environment
-   Variable**: key `MEALDB_KEY`, value = the key they give you.
-3. Render will redeploy automatically.
+The app works out of the box using TheMealDB's shared free test key ("1"),
+which gives full access to their whole recipe catalog — that's what's
+already running. A personal key exists, but it's actually a **paid,
+one-time supporter contribution** (not free, contrary to what an earlier
+version of this guide said) that mainly unlocks a couple of extra endpoints
+this app doesn't use. For a personal weekly planner, the free shared key is
+genuinely enough — not worth the cost here.
 
 ## Step 7 — (Optional) Add it to your phone's home screen
 
@@ -171,11 +171,90 @@ When you're ready:
 None of this is needed for you to use the site — it only matters if/when you
 want strangers finding it via Google.
 
-## Making changes later
+## Updating your existing site with new files
 
-Edit any file directly on GitHub (click the pencil icon on a file), commit the
-change, and Render redeploys automatically within a couple of minutes. No
-command line needed.
+Whenever I give you updated files (like this update), here's exactly how to
+get them live. You never redo Steps 1–3 — that setup was one-time.
+
+1. **Figure out which files changed.** I'll always tell you — usually it's
+   just 2-4 of the project's files, not everything.
+2. **For each changed file**, go to your GitHub repo and click directly on
+   that file's name in the file list (e.g. `server.js`, or `public/index.html`
+   — click into the `public` folder first if needed).
+3. Click the **pencil icon** (top right of the file view) to edit it.
+4. **Select all the existing text in the editor box** (click inside it, then
+   Ctrl+A / Cmd+A) and delete it.
+5. **Paste in the new version** of that file (Ctrl+V / Cmd+V).
+6. Scroll down, make sure **"Commit directly to the main branch"** is
+   selected, and click **"Commit changes"**.
+7. Repeat steps 2–6 for every other changed file.
+8. **For a brand-new file** that didn't exist before (like `ai.js` was, or
+   the icon files in this update), use **"Add file" → "Create new file"**
+   instead of editing — type the exact filename (including any folder, like
+   `public/icon-192.png`), paste or upload the content, and commit.
+9. Once all the changed files are committed, go to **Render → your
+   service** — it detects the new commit and redeploys automatically within
+   a couple of minutes (watch the **"Events"** or **"Logs"** tab for
+   "Live"). If it doesn't auto-start, click **"Manual Deploy" → "Deploy
+   latest commit"**.
+10. Reload your site's URL once it says Live.
+
+**One exception — binary files (images):** GitHub's web editor is
+text-only, so a `.png` icon file can't be pasted as text. For those, use
+**"Add file" → "Upload files"** instead, and drag the image file in directly
+(I'll always let you know when a file is an image, like the new icons in
+this update).
+
+## Filters update: time, spice, skill, equipment
+
+Four more filters now live on the Filters tab: **max time per meal**, **spice
+tolerance**, **your cooking skill**, and **kitchen equipment you have**.
+Worth knowing: TheMealDB has no structured data for any of these (no real
+minutes field, no spice rating, no difficulty, no appliance list) — so these
+work off a best-effort estimate from each recipe's ingredient count, step
+count, and instruction text. It's a genuinely useful first pass, and gets
+noticeably more accurate once a Gemini or Claude key is set (the AI reads
+the actual recipe instead of estimating from word counts). Leave any of
+these blank to skip that filter entirely.
+
+There's also a **"Not feeling this"** button on every meal now, which finds
+a different recipe for just that slot without rebuilding the whole week.
+
+## Nutrition, pantry assumptions, and feedback
+
+- **🔢 Nutrition button** on every meal card estimates calories, protein,
+  carbs and fat per serving. This **requires an AI key** (Gemini or Claude —
+  see the AI setup step above) since TheMealDB has no nutrition data and
+  there's no other nutrition source wired in. Without a key, the button
+  tells you that plainly rather than showing made-up numbers.
+- **Pantry assumptions** (Pantry tab): checkboxes for "assume basic staples,"
+  "assume full spice rack," and "assume full condiments/sauces," each with
+  an "Advanced selection" button that opens a full checklist so you can
+  check off exactly what you have instead of an all-or-nothing assumption.
+  These only affect what's shown as already "have" on ingredient lists —
+  they don't change which recipes get picked.
+- **👍/👎 feedback** on every meal. A 👎 adds that dish to your no-repeat
+  history so it won't be suggested again; 👍 is just a personal record for
+  now (saved in your browser).
+
+## Surprise me, cuisine learning, and the app icon
+
+- **🎲 Surprise me** (Plan tab) gives you one random recipe instantly,
+  independent of building a full week — useful for "what should I just make
+  tonight." It can be saved as a favorite, rated, checked for nutrition, or
+  dropped straight into an already-built week via "Add to day."
+- **Weak cuisine learning:** once you've 👍'd two or more meals from the
+  same cuisine (TheMealDB's "area," e.g. Italian, Mexican, Thai) with no
+  outweighing 👎s, future plan-building and Surprise Me gently try that
+  cuisine's dishes first. It's a soft nudge, not a filter — other cuisines
+  are never excluded, and nothing happens until you've actually liked a
+  couple of dishes.
+- **Home-screen icon:** the site now has a proper icon and name for "Add to
+  Home Screen" on phones, instead of a generic browser icon. New files:
+  `public/icon-192.png`, `public/icon-512.png`,
+  `public/apple-touch-icon.png`, `public/manifest.json` — these are new
+  additions, not edits to existing files, so add them with GitHub's "Add
+  file" (images need "Upload files" specifically, not the text editor).
 
 ## What this version can and can't do, compared to the AI version
 

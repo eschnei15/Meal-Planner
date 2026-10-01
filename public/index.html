@@ -1,6 +1,12 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>Chef's Table – Weekly Meal Planner</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#b5482a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Chef's Table">
 <style>
 :root{--bg:#faf6f0;--card:#fff;--ink:#2b2622;--mut:#7a6f66;--acc:#b5482a;--acc2:#f3e3da;--line:#e6dccf;--ok:#3f7d4e}
 @media(prefers-color-scheme:dark){:root{--bg:#1c1917;--card:#27221f;--ink:#f1ebe4;--mut:#a89d92;--acc:#e0764f;--acc2:#3a2a23;--line:#3b342f;--ok:#7fc08e}}
@@ -66,10 +72,20 @@ img.thumb{width:100%;border-radius:10px;margin:6px 0}
 <div class="grid">
 <div><label>Days to plan</label><input id="days" type="number" min="1" max="7" value="5"></div>
 <div><label>Batch cooking / leftovers</label><select id="batch"><option value="0">Off</option><option value="1">On — reuse dinner for a packed lunch</option></select></div>
+<div><label>Max time per meal (min)</label><input id="maxTime" type="number" min="5" step="5" placeholder="e.g. 45"></div>
+<div><label>Spice tolerance</label><select id="spiceLevel"><option value="">No preference</option><option>Mild</option><option>Medium</option><option>Hot</option></select></div>
+<div><label>Your cooking skill</label><select id="skillLevel"><option value="">No preference</option><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></div>
 </div>
+<label>Kitchen equipment you have (comma-separated)</label>
+<input id="equipment" placeholder="e.g. oven, stovetop, blender, slow cooker, air fryer">
+<p class="meta">⚠️ TheMealDB doesn't publish real time/spice/difficulty/equipment data, so these four filters are a best-effort estimate from each recipe's ingredients and instructions (much more accurate once a Gemini/Claude key is set — see README). Leave any of them blank/"No preference" to skip that filter entirely.</p>
 <label>Meals per day &amp; how each is eaten</label>
 <div id="mealRows"></div>
-<div class="row"><select id="newMealType"><option>Breakfast</option><option>Lunch</option><option>Dinner</option><option>Snack</option></select><button class="sm" id="addMeal">Add meal</button></div>
+<div class="row">
+ <select id="newMealType"><option>Breakfast</option><option>Lunch</option><option>Dinner</option><option>Snack</option></select>
+ <select id="newMealMode"></select>
+ <button class="sm" id="addMeal">Add meal</button>
+</div>
 <label>Allergies (comma-separated, never included)</label><input id="allergies" placeholder="e.g. peanuts, shellfish">
 <label>Foods you dislike (comma-separated)</label><input id="dislikes" placeholder="e.g. olives, cilantro">
 </section>
@@ -78,12 +94,18 @@ img.thumb{width:100%;border-radius:10px;margin:6px 0}
 <h2>What's at home</h2>
 <p class="sub">One item per line. Add "(use soon)" to prioritise something. The planner favors these ingredients but pulls from the wider database too.</p>
 <textarea id="pantryText" placeholder="chicken thighs (use soon)&#10;rice&#10;onions&#10;garlic"></textarea>
+<label style="margin-top:14px"><input type="checkbox" id="assumeBasics" style="width:auto"> Assume basic staples (oil, salt, pepper)</label>
+<div class="row" style="margin:4px 0"><label style="margin:0;flex:1"><input type="checkbox" id="assumeSpices" style="width:auto"> Assume full spice rack</label><button class="sm" id="advSpices">Advanced selection</button></div>
+<div id="spicePanel" class="hide card" style="padding:10px"><p class="meta">Check off exactly what you have — this overrides "assume full spice rack" above with your specific list.</p><div class="chips" id="spiceGrid"></div></div>
+<div class="row" style="margin:4px 0"><label style="margin:0;flex:1"><input type="checkbox" id="assumeCondiments" style="width:auto"> Assume full condiments/sauces</label><button class="sm" id="advCondiments">Advanced selection</button></div>
+<div id="condPanel" class="hide card" style="padding:10px"><p class="meta">Check off exactly what you have — this overrides "assume full condiments/sauces" above with your specific list.</p><div class="chips" id="condGrid"></div></div>
 <p class="meta">Remembering <span id="histCount">0</span> recent dish names to avoid repeats. <button class="sm" id="clearHist">Clear history</button></p>
 </section>
 
 <section id="plan" class="hide">
 <button class="pri" id="gen">Build my week</button>
 <p class="err" id="err"></p>
+<div class="card" style="margin-top:12px"><button class="sm" id="surpriseBtn">🎲 Surprise me</button><p class="meta" style="margin:6px 0 0">One random recipe right now, no need to build a full week.</p><div id="surpriseCard" class="hide"></div></div>
 <button class="sm" id="printPlan">🖨️ Print / export</button>
 <details class="card" id="favBox" style="margin-top:12px"><summary>★ Favorites (<span id="favCount">0</span>)</summary><div id="favList"></div></details>
 <div id="out"></div>
@@ -100,8 +122,21 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const PRESETS=["Kosher","Halal","Vegetarian","Vegan","Gluten-free","Dairy-free"];
 const MODES=["At home (eaten fresh)","Packed to go (reheat at work)","Packed to go (eaten cold)"];
-let S={rules:[],activeRules:[],notes:[],f:{days:5,batch:false,allergies:"",dislikes:"",meals:[{type:"Lunch",mode:MODES[2]},{type:"Dinner",mode:MODES[0]}]},pantry:"",fav:[],hist:[],consent:false};
-try{const s=localStorage.getItem("chefSite");if(s)S=Object.assign(S,JSON.parse(s))}catch(e){}
+const SPICE_LIST=["Black pepper","Garlic powder","Onion powder","Paprika","Smoked paprika","Cayenne pepper","Chili powder","Cumin","Ground coriander","Turmeric","Curry powder","Cinnamon","Nutmeg","Allspice","Cardamom","Cloves","Ground ginger","Oregano","Dried basil","Thyme","Rosemary","Bay leaves","Dried dill","Dried parsley","Sage","Red pepper flakes","Mustard powder","Fennel seeds","Cumin seeds","Mustard seeds","Garam masala","Italian seasoning","Taco seasoning","Old Bay seasoning","Five-spice powder","Saffron","Vanilla extract","Ground cayenne","Celery salt"];
+const COND_LIST=["Ketchup","Mustard","Mayonnaise","Soy sauce","Worcestershire sauce","Hot sauce","Sriracha","BBQ sauce","White vinegar","Apple cider vinegar","Balsamic vinegar","Rice vinegar","Honey","Maple syrup","Olive oil","Vegetable oil","Sesame oil","Fish sauce","Oyster sauce","Hoisin sauce","Tahini","Peanut butter","Salsa","Pesto","Tomato paste","Chicken broth","Beef broth","Vegetable broth","Coconut milk","Dijon mustard","Ranch dressing","Italian dressing"];
+let S={rules:[],activeRules:[],notes:[],f:{days:5,batch:false,allergies:"",dislikes:"",maxTime:"",spiceLevel:"",skillLevel:"",equipment:"",meals:[{type:"Lunch",mode:MODES[2]},{type:"Dinner",mode:MODES[0]}]},pantry:"",assume:{basics:false,spices:false,condiments:false,spiceSel:[],condSel:[]},fav:[],hist:[],fb:{},consent:false};
+const DEFAULT_F={days:5,batch:false,allergies:"",dislikes:"",maxTime:"",spiceLevel:"",skillLevel:"",equipment:"",meals:[{type:"Lunch",mode:"Packed to go (eaten cold)"},{type:"Dinner",mode:"At home (eaten fresh)"}]};
+const DEFAULT_ASSUME={basics:false,spices:false,condiments:false,spiceSel:[],condSel:[]};
+try{
+ const s=localStorage.getItem("chefSite");
+ if(s){
+  const saved=JSON.parse(s);
+  S=Object.assign(S,saved);
+  S.f=Object.assign({},DEFAULT_F,saved.f||{});
+  S.assume=Object.assign({},DEFAULT_ASSUME,saved.assume||{});
+  S.fb=saved.fb||{};
+ }
+}catch(e){}
 let plan=[];
 const save=()=>{try{localStorage.setItem("chefSite",JSON.stringify(S))}catch(e){}};
 
@@ -133,15 +168,47 @@ $("days").value=S.f.days;$("days").oninput=()=>{S.f.days=+$("days").value;save()
 $("batch").value=S.f.batch?"1":"0";$("batch").onchange=()=>{S.f.batch=$("batch").value==="1";save()};
 $("allergies").value=S.f.allergies;$("allergies").oninput=()=>{S.f.allergies=$("allergies").value;save()};
 $("dislikes").value=S.f.dislikes;$("dislikes").oninput=()=>{S.f.dislikes=$("dislikes").value;save()};
+$("maxTime").value=S.f.maxTime;$("maxTime").oninput=()=>{S.f.maxTime=$("maxTime").value;save()};
+$("spiceLevel").value=S.f.spiceLevel;$("spiceLevel").onchange=()=>{S.f.spiceLevel=$("spiceLevel").value;save()};
+$("skillLevel").value=S.f.skillLevel;$("skillLevel").onchange=()=>{S.f.skillLevel=$("skillLevel").value;save()};
+$("equipment").value=S.f.equipment;$("equipment").oninput=()=>{S.f.equipment=$("equipment").value;save()};
 function drawMealRows(){
  $("mealRows").innerHTML=S.f.meals.map((m,i)=>`<div class="row" style="margin:6px 0"><b style="min-width:70px;font:600 13px system-ui">${esc(m.type)}</b><select data-i="${i}" class="mm">${MODES.map(x=>`<option ${x===m.mode?"selected":""}>${x}</option>`).join("")}</select><button class="sm" data-rm="${i}">Remove</button></div>`).join("");
  $("mealRows").querySelectorAll(".mm").forEach(e=>e.onchange=()=>{S.f.meals[+e.dataset.i].mode=e.value;save()});
  $("mealRows").querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{S.f.meals.splice(+b.dataset.rm,1);save();drawMealRows()});
 }
-$("addMeal").onclick=()=>{S.f.meals.push({type:$("newMealType").value,mode:MODES[0]});save();drawMealRows()};
+$("newMealMode").innerHTML=MODES.map(m=>`<option>${m}</option>`).join("");
+$("addMeal").onclick=()=>{S.f.meals.push({type:$("newMealType").value,mode:$("newMealMode").value});save();drawMealRows()};
 $("pantryText").value=S.pantry;$("pantryText").oninput=()=>{S.pantry=$("pantryText").value;save()};
 $("histCount").textContent=S.hist.length;
 $("clearHist").onclick=()=>{S.hist=[];save();$("histCount").textContent=0};
+
+$("assumeBasics").checked=S.assume.basics;$("assumeBasics").onchange=()=>{S.assume.basics=$("assumeBasics").checked;save()};
+$("assumeSpices").checked=S.assume.spices;$("assumeSpices").onchange=()=>{S.assume.spices=$("assumeSpices").checked;save()};
+$("assumeCondiments").checked=S.assume.condiments;$("assumeCondiments").onchange=()=>{S.assume.condiments=$("assumeCondiments").checked;save()};
+function buildGrid(gridId,list,selArrKey){
+ $(gridId).innerHTML=list.map(item=>`<span class="chip" data-item="${esc(item)}" style="${S.assume[selArrKey].includes(item)?'background:var(--acc);color:#fff':''}">${esc(item)}</span>`).join("");
+ $(gridId).querySelectorAll(".chip").forEach(c=>c.onclick=()=>{
+  const item=c.dataset.item,arr=S.assume[selArrKey];
+  const i=arr.indexOf(item);
+  if(i>-1)arr.splice(i,1);else arr.push(item);
+  save();buildGrid(gridId,list,selArrKey);
+ });
+}
+buildGrid("spiceGrid",SPICE_LIST,"spiceSel");
+buildGrid("condGrid",COND_LIST,"condSel");
+$("advSpices").onclick=()=>$("spicePanel").classList.toggle("hide");
+$("advCondiments").onclick=()=>$("condPanel").classList.toggle("hide");
+// Combine the typed pantry with whatever's been assumed/checked, for a more
+// accurate "have" display and for substitute suggestions. Doesn't affect
+// which recipes get chosen, only what's shown as already on hand.
+function effectivePantry(){
+ const extra=[];
+ if(S.assume.basics)extra.push("cooking oil","salt","black pepper");
+ if(S.assume.spices)extra.push(...SPICE_LIST); else extra.push(...S.assume.spiceSel);
+ if(S.assume.condiments)extra.push(...COND_LIST); else extra.push(...S.assume.condSel);
+ return S.pantry+(extra.length?"\n"+extra.join("\n"):"");
+}
 
 drawRules();drawPresets();drawMealRows();
 
@@ -159,8 +226,10 @@ $("gen").onclick=async()=>{
   const mealModes={};S.f.meals.forEach(m=>mealModes[m.type]=m.mode);
   const data=await api("/api/plan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
    days:S.f.days, mealTypes:S.f.meals.map(m=>m.type), activeRules:S.activeRules,
-   allergies:S.f.allergies, dislikes:S.f.dislikes, pantry:S.pantry,
-   usedNamesHistory:S.hist, batch:S.f.batch, mealModes
+   allergies:S.f.allergies, dislikes:S.f.dislikes, pantry:effectivePantry(),
+   usedNamesHistory:S.hist, batch:S.f.batch, mealModes,
+   maxTime:S.f.maxTime||null, spiceLevel:S.f.spiceLevel, skillLevel:S.f.skillLevel,
+   equipment:S.f.equipment.split(",").map(s=>s.trim()).filter(Boolean), preferAreas:likedAreas()
   })});
   plan=data.plan;
   S.hist=[...new Set(S.hist.concat(plan.flatMap(d=>d.meals.filter(m=>m.name).map(m=>m.name))))].slice(-80);
@@ -173,18 +242,78 @@ $("gen").onclick=async()=>{
 function mealCard(m,di,mi,open){
  if(m.error) return `<details ${open?"open":""}><summary>${esc(m.type)}: no match found</summary><p class="err">${esc(m.error)}</p></details>`;
  const ingRows=(m.ingredients||[]).map((g,gi)=>`<div class="ing" id="i${di}_${mi}_${gi}"><span>${esc(g.measure)} ${esc(g.item)} <span class="${g.have?"have":"meta"}">${g.have?"✓ have":""}</span></span>${m.isLeftover?"":`<button class="sm" data-a="${di},${mi},${gi}">I don't have this</button>`}</div><div id="s${di}_${mi}_${gi}"></div>`).join("");
+ const badges=[m.estMinutes?`~${m.estMinutes} min`:"",m.complexity||"",m.spiceLevel?m.spiceLevel+" spice":""].filter(Boolean).join(" · ");
  return `<details ${open?"open":""}><summary>${esc(m.type)}: ${esc(m.name)}<span class="meta"> · ${esc(m.area||"")} ${esc(m.category||"")}</span></summary>
+ ${badges?`<p class="meta">${esc(badges)} (estimated)</p>`:""}
  ${m.thumb?`<img class="thumb" src="${esc(m.thumb)}" alt="">`:""}
  <div>${ingRows}</div>
  <ol>${(m.instructions||[]).map(s=>`<li>${esc(s)}</li>`).join("")}</ol>
  ${m.source?`<p class="meta"><a href="${esc(m.source)}" target="_blank" rel="noopener">Original recipe source</a></p>`:""}
- <div class="acts row"><button class="sm" data-fv="${di},${mi}">${isFav(m)?"★ Saved":"☆ Save favorite"}</button></div>
+ <div id="x${di}_${mi}" class="meta"></div>
+ ${m.name?`<div id="n${di}_${mi}"></div>`:""}
+ <div class="acts row">${m.isLeftover?"":`<button class="sm" data-rr="${di},${mi}">Not feeling this</button>`}<button class="sm" data-fv="${di},${mi}">${isFav(m)?"★ Saved":"☆ Save favorite"}</button>${m.name?`<button class="sm" data-nut="${di},${mi}">🔢 Nutrition</button>`:""}${m.name?`<button class="sm" data-rate="${di},${mi},1">${ratingOf(m.name)===1?"👍 Liked":"👍"}</button><button class="sm" data-rate="${di},${mi},-1">${ratingOf(m.name)===-1?"👎 Noted":"👎"}</button>`:""}</div>
  </details>`;
 }
 function isFav(m){return S.fav.some(x=>x.name===m.name)}
 function wireCard(root,di_override,arr){
  root.querySelectorAll("button[data-a]").forEach(b=>b.onclick=()=>subs(b,arr));
  root.querySelectorAll("button[data-fv]").forEach(b=>b.onclick=()=>toggleFav(b,arr));
+ root.querySelectorAll("button[data-rr]").forEach(b=>b.onclick=()=>reroll(b,arr));
+ root.querySelectorAll("button[data-nut]").forEach(b=>b.onclick=()=>showNutrition(b,arr));
+ root.querySelectorAll("button[data-rate]").forEach(b=>b.onclick=()=>rateMeal(b,arr));
+}
+async function showNutrition(b,arr){
+ const [di,mi]=b.dataset.nut.split(",").map(Number),m=arr[di].meals[mi],box=document.getElementById(`n${di}_${mi}`);
+ if(box.dataset.loaded){box.classList.toggle("hide");return}
+ box.textContent="Estimating…";b.disabled=true;
+ try{
+  const r=await api("/api/nutrition",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:m.name,ingredients:m.ingredients,servings:4})});
+  if(!r.available){box.innerHTML=`<p class="meta">${esc(r.note)}</p>`;b.disabled=false;return}
+  box.innerHTML=`<p class="meta">Per serving (assumes ${esc(r.servings)} servings): <b>${esc(r.calories)}</b> cal · <b>${esc(r.protein)}g</b> protein · <b>${esc(r.carbs)}g</b> carbs · <b>${esc(r.fat)}g</b> fat<br>${esc(r.note)}</p>`;
+  box.dataset.loaded="1";
+ }catch(e){box.innerHTML='<p class="meta err">Couldn\'t load nutrition info, try again.</p>'}
+ b.disabled=false;
+}
+function ratingOf(name){return (S.fb[name]&&S.fb[name].rating)||0}
+function setRating(name,area,val){
+ const cur=ratingOf(name);
+ const rating=(cur===val)?0:val; // click again to un-rate
+ S.fb[name]=rating?{rating,area:area||(S.fb[name]&&S.fb[name].area)}:undefined;
+ if(!S.fb[name])delete S.fb[name];
+ if(rating===-1)S.hist=[...new Set(S.hist.concat([name]))].slice(-80); // don't resuggest disliked meals
+ save();
+}
+// Weak cuisine-learning: areas with 2+ likes and no dislikes against them
+// get gently preferred (not required) in future suggestions.
+function likedAreas(){
+ const counts={};
+ for(const v of Object.values(S.fb)){
+  if(!v||!v.area)continue;
+  counts[v.area]=(counts[v.area]||0)+v.rating;
+ }
+ return Object.entries(counts).filter(([,score])=>score>=2).sort((a,b)=>b[1]-a[1]).map(([area])=>area);
+}
+function rateMeal(b,arr){
+ const [di,mi,val]=b.dataset.rate.split(",").map(Number),m=arr[di].meals[mi];
+ if(!m.name)return;
+ setRating(m.name,m.area,val);
+ render();renderCal();
+}
+async function reroll(b,arr){
+ const [di,mi]=b.dataset.rr.split(",").map(Number),m=arr[di].meals[mi],box=document.getElementById(`x${di}_${mi}`);
+ box.textContent="Finding something different…";b.disabled=true;
+ try{
+  const sameDayNames=arr[di].meals.filter((x,i)=>i!==mi&&x.name).map(x=>x.name);
+  const r=await api("/api/swap-meal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+   type:m.type, pantry:effectivePantry(), activeRules:S.activeRules, allergies:S.f.allergies, dislikes:S.f.dislikes,
+   usedNamesHistory:S.hist, sameDayNames, maxTime:S.f.maxTime||null, spiceLevel:S.f.spiceLevel,
+   skillLevel:S.f.skillLevel, equipment:S.f.equipment.split(",").map(s=>s.trim()).filter(Boolean), preferAreas:likedAreas()
+  })});
+  if(r.meal.error){box.textContent=r.meal.error;b.disabled=false;return}
+  arr[di].meals[mi]=r.meal;
+  if(r.meal.name){S.hist=[...new Set(S.hist.concat([r.meal.name]))].slice(-80);$("histCount").textContent=S.hist.length;save()}
+  render();renderCal();
+ }catch(e){box.textContent="Couldn't reach the planner backend. Try again.";b.disabled=false}
 }
 function toggleFav(b,arr){
  const [di,mi]=b.dataset.fv.split(",").map(Number),m=arr[di].meals[mi];
@@ -231,6 +360,70 @@ function renderCal(){
  $("calOut").innerHTML=`<div class="card"><h2>${esc(d.day)}</h2>${d.meals.map((m,mi)=>mealCard(m,di,mi,true)).join("")}</div>`;
  wireCard($("calOut"),0,plan);
 }
+let surpriseMeal=null;
+async function surpriseGo(){
+ if(!requireConsent())return;
+ $("surpriseBtn").disabled=true;$("surpriseBtn").textContent="Finding something…";
+ try{
+  const r=await api("/api/swap-meal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+   type:"Meal", pantry:effectivePantry(), activeRules:S.activeRules, allergies:S.f.allergies, dislikes:S.f.dislikes,
+   usedNamesHistory:S.hist, sameDayNames:[], maxTime:S.f.maxTime||null, spiceLevel:S.f.spiceLevel,
+   skillLevel:S.f.skillLevel, equipment:S.f.equipment.split(",").map(s=>s.trim()).filter(Boolean), preferAreas:likedAreas()
+  })});
+  surpriseMeal=r.meal;
+  if(surpriseMeal.name){S.hist=[...new Set(S.hist.concat([surpriseMeal.name]))].slice(-80);$("histCount").textContent=S.hist.length;save();}
+ }catch(e){surpriseMeal={error:"Couldn't reach the planner backend. Try again."};}
+ renderSurprise();
+ $("surpriseBtn").disabled=false;$("surpriseBtn").textContent="🎲 Surprise me";
+}
+function renderSurprise(){
+ const box=$("surpriseCard");
+ if(!surpriseMeal){box.classList.add("hide");box.innerHTML="";return}
+ box.classList.remove("hide");
+ const m=surpriseMeal;
+ if(m.error){box.innerHTML=`<p class="err">${esc(m.error)}</p>`;return}
+ const badges=[m.estMinutes?`~${m.estMinutes} min`:"",m.complexity||"",m.spiceLevel?m.spiceLevel+" spice":""].filter(Boolean).join(" · ");
+ const dayOpts=plan.length?plan.map((d,i)=>`<option value="${i}">${esc(d.day)}</option>`).join(""):"";
+ box.innerHTML=`<h2>${esc(m.name)} <span class="meta">· ${esc(m.area||"")} ${esc(m.category||"")}</span></h2>
+  ${badges?`<p class="meta">${esc(badges)} (estimated)</p>`:""}
+  ${m.thumb?`<img class="thumb" src="${esc(m.thumb)}" alt="">`:""}
+  <div>${(m.ingredients||[]).map(g=>`<div class="ing"><span>${esc(g.measure)} ${esc(g.item)} <span class="${g.have?"have":"meta"}">${g.have?"✓ have":""}</span></span></div>`).join("")}</div>
+  <ol>${(m.instructions||[]).map(s=>`<li>${esc(s)}</li>`).join("")}</ol>
+  ${m.source?`<p class="meta"><a href="${esc(m.source)}" target="_blank" rel="noopener">Original recipe source</a></p>`:""}
+  <div id="surpriseNut" class="meta"></div>
+  <div class="acts row">
+   <button class="sm" id="surpriseAgain">🎲 Surprise me again</button>
+   <button class="sm" id="surpriseFav">${S.fav.some(x=>x.name===m.name)?"★ Saved":"☆ Save favorite"}</button>
+   <button class="sm" id="surpriseNutBtn">🔢 Nutrition</button>
+   <button class="sm" id="surpriseLike">${ratingOf(m.name)===1?"👍 Liked":"👍"}</button>
+   <button class="sm" id="surpriseDislike">${ratingOf(m.name)===-1?"👎 Noted":"👎"}</button>
+   ${dayOpts?`<select id="surpriseDaySel">${dayOpts}</select><button class="sm" id="surpriseAddDay">Add to day</button>`:""}
+  </div>`;
+ $("surpriseAgain").onclick=surpriseGo;
+ $("surpriseFav").onclick=()=>{
+  if(S.fav.some(x=>x.name===m.name))S.fav=S.fav.filter(x=>x.name!==m.name);else S.fav.push(JSON.parse(JSON.stringify(m)));
+  save();renderFav();renderSurprise();
+ };
+ $("surpriseNutBtn").onclick=async()=>{
+  const nb=$("surpriseNut");nb.textContent="Estimating…";
+  try{
+   const r=await api("/api/nutrition",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:m.name,ingredients:m.ingredients,servings:4})});
+   if(!r.available){nb.textContent=r.note;return}
+   nb.innerHTML=`Per serving (assumes ${esc(r.servings)} servings): <b>${esc(r.calories)}</b> cal · <b>${esc(r.protein)}g</b> protein · <b>${esc(r.carbs)}g</b> carbs · <b>${esc(r.fat)}g</b> fat<br>${esc(r.note)}`;
+  }catch(e){nb.textContent="Couldn't load nutrition info."}
+ };
+ $("surpriseLike").onclick=()=>{setRating(m.name,m.area,1);renderSurprise();};
+ $("surpriseDislike").onclick=()=>{setRating(m.name,m.area,-1);renderSurprise();};
+ if(dayOpts){
+  $("surpriseAddDay").onclick=()=>{
+   const di=+$("surpriseDaySel").value;
+   plan[di].meals.push(JSON.parse(JSON.stringify(m)));
+   save();render();renderCal();
+  };
+ }
+}
+$("surpriseBtn").onclick=surpriseGo;
+
 $("printPlan").onclick=()=>window.print();
 $("printCal").onclick=()=>window.print();
 renderFav();

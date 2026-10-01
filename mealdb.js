@@ -17,6 +17,13 @@ async function filterByIngredient(ingredient) {
   return data.meals || [];
 }
 
+// Search meals by cuisine/area (e.g. "Italian", "Mexican") — used for the
+// weak cuisine-learning nudge, to surface more of what someone has liked.
+async function filterByArea(area) {
+  const data = await getJson(`${BASE}/filter.php?a=${encodeURIComponent(area)}`);
+  return data.meals || [];
+}
+
 async function randomMeal() {
   const data = await getJson(`${BASE}/random.php`);
   return (data.meals || [])[0] || null;
@@ -46,4 +53,4 @@ async function lookupMeal(id) {
   };
 }
 
-module.exports = { filterByIngredient, randomMeal, lookupMeal };
+module.exports = { filterByIngredient, filterByArea, randomMeal, lookupMeal };

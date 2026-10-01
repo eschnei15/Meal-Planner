@@ -1,7 +1,7 @@
 const express = require("express");
 const path = require("path");
 const cookieParser = require("cookie-parser");
-const { filterByIngredient, randomMeal, lookupMeal } = require("./mealdb");
+const { filterByIngredient, filterByArea, randomMeal, lookupMeal } = require("./mealdb");
 const { checkMeal, getSubstitutes, PRESET_CHECKS } = require("./rules");
 const ai = require("./ai");
 
@@ -57,9 +57,18 @@ function pantryHas(pantryText, ingredientName) {
 }
 
 // Try to find one valid meal for a day/slot given profile constraints.
-async function findMeal({ pantryItems, activeRules, allergies, dislikes, usedNames, sameDayCategories }) {
+async function findMeal({ pantryItems, activeRules, allergies, dislikes, usedNames, sameDayCategories, maxTime, spiceLevel, skillLevel, equipment, preferAreas = [] }) {
   const candidates = new Map(); // id -> {id,name}
-  // Pull candidates from a few priority pantry ingredients first (use-soon items float to the front)
+  // Weak "liked cuisine" nudge: try a couple of their favorite cuisines
+  // first. This is a soft bias, not a filter — it just means liked-style
+  // dishes get tried before the general pool, not that others are excluded.
+  for (const area of preferAreas.slice(0, 2)) {
+    try {
+      const found = await filterByArea(area);
+      for (const f of found.slice(0, 5)) candidates.set(f.idMeal, f);
+    } catch (e) { /* ignore */ }
+  }
+  // Pull candidates from a few priority pantry ingredients next (use-soon items float to the front)
   for (const p of pantryItems.slice(0, 3)) {
     try {
       const found = await filterByIngredient(p.replace(/\(use soon\)/i, "").trim());
@@ -74,23 +83,33 @@ async function findMeal({ pantryItems, activeRules, allergies, dislikes, usedNam
     } catch (e) { /* ignore */ }
   }
 
-  const tried = [];
+  const tryDetail = async (detail) => {
+    if (!detail) return null;
+    const ingNames = detail.ingredients.map(i => i.item);
+    const instructionsText = (detail.instructions || []).join(" ");
+    const check = checkMeal(ingNames, activeRules, allergies, dislikes, {
+      maxTime, spiceLevel, skillLevel, equipment, instructionsText, stepsCount: (detail.instructions || []).length
+    });
+    if (check.violates) return null;
+    // If an AI key is set, use it as a smarter second check (catches things
+    // a keyword/heuristic scan can miss). If AI is off or the call fails,
+    // the free check above is what decides — the recipe still gets served.
+    const aiResult = await ai.aiCheckMeal({ name: detail.name, ingredients: ingNames, instructions: detail.instructions, activeRules, allergies, dislikes, maxTime, spiceLevel, skillLevel, equipment });
+    if (aiResult && aiResult.ok === false) return null;
+    detail.estMinutes = check.estMinutes;
+    detail.complexity = check.complexity;
+    detail.spiceLevel = check.spiceLevel;
+    if (aiResult) detail.aiChecked = true;
+    return detail;
+  };
+
   for (const c of candidates.values()) {
     if (usedNames.has(norm(c.strMeal))) continue;
     let detail;
     try { detail = await lookupMeal(c.idMeal); } catch (e) { continue; }
-    if (!detail) continue;
-    if (sameDayCategories.has(detail.category)) continue; // keep the day varied
-    const ingNames = detail.ingredients.map(i => i.item);
-    const { violates } = checkMeal(ingNames, activeRules, allergies, dislikes);
-    if (violates) continue;
-    // If an AI key is set, use it as a smarter second check (catches things
-    // a keyword scan can miss). If AI is off or the call fails, the free
-    // keyword check above is what decides — the recipe still gets served.
-    const aiResult = await ai.aiCheckMeal({ name: detail.name, ingredients: ingNames, instructions: detail.instructions, activeRules, allergies, dislikes });
-    if (aiResult && aiResult.ok === false) continue;
-    if (aiResult) detail._aiChecked = true;
-    return detail;
+    if (!detail || sameDayCategories.has(detail.category)) continue; // keep the day varied
+    const result = await tryDetail(detail);
+    if (result) return result;
   }
 
   // Fallback: a few more random tries, relaxing the same-day-category rule last
@@ -100,13 +119,8 @@ async function findMeal({ pantryItems, activeRules, allergies, dislikes, usedNam
     if (!r || usedNames.has(norm(r.strMeal))) continue;
     let detail;
     try { detail = await lookupMeal(r.idMeal); } catch (e) { continue; }
-    if (!detail) continue;
-    const ingNames = detail.ingredients.map(i => i.item);
-    const { violates } = checkMeal(ingNames, activeRules, allergies, dislikes);
-    if (violates) continue;
-    const aiResult = await ai.aiCheckMeal({ name: detail.name, ingredients: ingNames, instructions: detail.instructions, activeRules, allergies, dislikes });
-    if (aiResult && aiResult.ok === false) continue;
-    return detail;
+    const result = await tryDetail(detail);
+    if (result) return result;
   }
   return null; // genuinely couldn't find anything that fits
 }
@@ -131,7 +145,12 @@ app.post("/api/plan", async (req, res) => {
       pantry = "",
       usedNamesHistory = [],
       batch = false,
-      mealModes = {} // { Lunch: "Packed to go (eaten cold)", Dinner: "At home (eaten fresh)" }
+      mealModes = {}, // { Lunch: "Packed to go (eaten cold)", Dinner: "At home (eaten fresh)" }
+      maxTime = null,       // minutes, or null for no limit
+      spiceLevel = "",      // "Mild" | "Medium" | "Hot"
+      skillLevel = "",      // "Beginner" | "Intermediate" | "Advanced"
+      equipment = [],       // e.g. ["oven","stovetop","blender"]
+      preferAreas = []      // weak cuisine-learning hint from liked meals, e.g. ["Italian"]
     } = req.body;
 
     const pantryItems = pantry.split(/\n|,/).map(s => s.trim()).filter(Boolean)
@@ -157,7 +176,7 @@ app.post("/api/plan", async (req, res) => {
           leftoverPortionsLeft--;
           continue;
         }
-        const found = await findMeal({ pantryItems, activeRules, allergies, dislikes, usedNames, sameDayCategories });
+        const found = await findMeal({ pantryItems, activeRules, allergies, dislikes, usedNames, sameDayCategories, maxTime, spiceLevel, skillLevel, equipment, preferAreas });
         if (!found) {
           meals.push({ type, name: null, mode, error: "Couldn't find a recipe that fits all your filters right now — try relaxing a filter or check back (TheMealDB's catalog is limited compared to an AI, so very narrow filters can come up empty)." });
           continue;
@@ -179,6 +198,36 @@ app.post("/api/plan", async (req, res) => {
   }
 });
 
+// "Not feeling this" — find one fresh replacement meal for a single slot.
+app.post("/api/swap-meal", async (req, res) => {
+  try {
+    const {
+      type = "Dinner", pantry = "", activeRules = [], allergies = "", dislikes = "",
+      usedNamesHistory = [], sameDayNames = [], maxTime = null, spiceLevel = "",
+      skillLevel = "", equipment = [], preferAreas = []
+    } = req.body;
+
+    const pantryItems = pantry.split(/\n|,/).map(s => s.trim()).filter(Boolean)
+      .sort((a, b) => /use soon/i.test(b) - /use soon/i.test(a));
+    // Exclude both the long-term history AND whatever else is already in this
+    // specific day, so the replacement doesn't just duplicate a sibling meal.
+    const usedNames = new Set([...usedNamesHistory, ...sameDayNames].map(norm));
+
+    const found = await findMeal({
+      pantryItems, activeRules, allergies, dislikes, usedNames,
+      sameDayCategories: new Set(), maxTime, spiceLevel, skillLevel, equipment, preferAreas
+    });
+    if (!found) {
+      return res.json({ meal: { type, name: null, error: "Couldn't find a different recipe that fits your filters right now — try again or relax a filter." } });
+    }
+    const withHave = annotateHave(found, pantry);
+    res.json({ meal: { type, isLeftover: false, ...withHave } });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Something went wrong finding a replacement. Please try again." });
+  }
+});
+
 app.post("/api/substitute", express.json(), async (req, res) => {
   const { item = "", recipeName = "", otherIngredients = [], activeRules = [], allergies = "", dislikes = "", excludeTags = [] } = req.body;
 
@@ -193,6 +242,16 @@ app.post("/api/substitute", express.json(), async (req, res) => {
   if (!subs) return res.json({ subs: [], note: "No match in our simple substitution list for that ingredient — try a similar item you already have on hand.", source: "table" });
   const filtered = subs.filter(s => !s.tags.some(t => excludeTags.includes(t)));
   res.json({ subs: filtered, source: "table" });
+});
+
+app.post("/api/nutrition", async (req, res) => {
+  const { name = "", ingredients = [], servings = 4 } = req.body;
+  if (!ai.enabled()) {
+    return res.json({ available: false, note: "Nutrition estimates need a free Gemini (or Claude) key set — see README Step 5. Without one, there's no nutrition data source wired up." });
+  }
+  const result = await ai.aiNutrition({ name, ingredients, servings });
+  if (!result) return res.json({ available: false, note: "Couldn't generate an estimate right now — try again." });
+  res.json({ available: true, ...result });
 });
 
 app.get("/api/meal/:id", async (req, res) => {

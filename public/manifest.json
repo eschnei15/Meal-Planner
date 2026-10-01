@@ -1,0 +1,13 @@
+{
+  "name": "Chef's Table — Weekly Meal Planner",
+  "short_name": "Chef's Table",
+  "description": "Free, independent weekly meal planner powered by TheMealDB.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#faf6f0",
+  "theme_color": "#b5482a",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
